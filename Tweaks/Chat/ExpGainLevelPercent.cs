@@ -5,8 +5,8 @@ using Dalamud.Utility;
 using FFXIVClientStructs.FFXIV.Client.Game.InstanceContent;
 using FFXIVClientStructs.FFXIV.Client.UI.Misc;
 using Lumina.Excel.Sheets;
+using Lumina.Text;
 using SimpleTweaksPlugin.TweakSystem;
-using SeStringBuilder = Lumina.Text.SeStringBuilder;
 
 namespace SimpleTweaksPlugin.Tweaks.Chat;
 
