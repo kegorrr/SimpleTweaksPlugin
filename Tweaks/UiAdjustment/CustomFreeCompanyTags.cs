@@ -3,11 +3,15 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Numerics;
+using System.Text.Json.Serialization;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Game.ClientState.Objects.SubKinds;
+using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Game.Gui.NamePlate;
 using Dalamud.Game.Text;
 using Dalamud.Game.Text.SeStringHandling;
 using Dalamud.Game.Text.SeStringHandling.Payloads;
+using Dalamud.Interface.Utility.Raii;
 using Dalamud.Utility;
 using FFXIVClientStructs.FFXIV.Client.Game.Character;
 using Lumina.Excel.Sheets;
@@ -27,8 +31,10 @@ namespace SimpleTweaksPlugin.Tweaks.UiAdjustment;
 [Changelog("1.8.9.0", "Added an icon viewer for supported icons.")]
 [Changelog("1.8.9.1", "Fix some issues with glow colours.")]
 [Changelog("1.8.9.2", "Fixed icon-only tags not displaying.")]
+[Changelog(UnreleasedVersion, "Added ability to give individual characters a custom FC tag.")]
 public unsafe class CustomFreeCompanyTags : UiAdjustments.SubTweak {
     public class Configs : TweakConfig {
+        public Dictionary<ulong, TagCustomization> PersonalCustomizations = new();
         public Dictionary<string, TagCustomization> FcCustomizations = new();
         public TagCustomization DefaultCustomization = new();
         public TagCustomization WandererCustomization = new() { Enabled = false, Replacement = "<crossworldicon><homeworld>" };
@@ -40,19 +46,18 @@ public unsafe class CustomFreeCompanyTags : UiAdjustments.SubTweak {
         public string Replacement = string.Empty;
         public bool HideQuoteMarks;
         public bool OwnLine;
+        [JsonIgnore] public bool DisplayNameUpdated;
+        public string DisplayName = string.Empty;
     }
 
     [TweakConfig] public Configs Config { get; private set; }
-
-    protected override void Setup() {
-        
-    }
 
     protected override void Enable() {
         Service.NamePlateGui.OnDataUpdate += NamePlateGuiOnOnDataUpdate;
     }
 
     private void NamePlateGuiOnOnDataUpdate(INamePlateUpdateContext context, IReadOnlyList<INamePlateUpdateHandler> handlers) {
+        var saveConfig = false;
         var localPlayer = Service.Objects.LocalPlayer;
         if (localPlayer == null) return;
         foreach (var h in handlers) {
@@ -60,9 +65,15 @@ public unsafe class CustomFreeCompanyTags : UiAdjustments.SubTweak {
 
             var battleChara = (BattleChara*)h.PlayerCharacter.Address;
             try {
-                var customization = Config.DefaultCustomization;
-                string companyTag = string.Empty;
-                if (battleChara->Character.HomeWorld != battleChara->Character.CurrentWorld) {
+                var companyTag = string.Empty;
+                if (Config.PersonalCustomizations.TryGetValue(battleChara->ContentId, out var customization)) {
+                    if (!customization.DisplayNameUpdated) {
+                        customization.DisplayName = $"{h.PlayerCharacter.Name.TextValue} @ {h.PlayerCharacter.HomeWorld.Value.Name.ExtractText()}";
+                        customization.DisplayNameUpdated = false;
+                        customization.Enabled = true;
+                        saveConfig = true;
+                    }
+                } else if (battleChara->Character.HomeWorld != battleChara->Character.CurrentWorld) {
                     // Wanderer
                     var w = Service.Data.Excel.GetSheet<World>().GetRowOrDefault(battleChara->Character.HomeWorld);
                     if (w == null || w.Value.RowId == 0 || w.Value.DataCenter.RowId == localPlayer.CurrentWorld.Value.DataCenter.RowId) {
@@ -76,7 +87,7 @@ public unsafe class CustomFreeCompanyTags : UiAdjustments.SubTweak {
                     customization = companyTag.Length switch {
                         <= 0 => null,
                         > 0 when Config.FcCustomizations.ContainsKey(companyTag) => Config.FcCustomizations[companyTag],
-                        _ => customization
+                        _ => Config.DefaultCustomization
                     };
                 }
 
@@ -86,7 +97,6 @@ public unsafe class CustomFreeCompanyTags : UiAdjustments.SubTweak {
                     } else {
 
                         var builder = new SeStringBuilder();
-                        // var payloads = new List<Payload>();
                         if (customization.OwnLine)
                             builder.AppendNewLine();
                         if (!customization.HideQuoteMarks)
@@ -307,6 +317,8 @@ public unsafe class CustomFreeCompanyTags : UiAdjustments.SubTweak {
                 }
             }
         }
+
+        if (saveConfig) RequestSaveConfig();
     }
 
     protected override void Disable() {
@@ -386,6 +398,7 @@ public unsafe class CustomFreeCompanyTags : UiAdjustments.SubTweak {
                 if (newFcName.Length > 0 && !Config.FcCustomizations.ContainsKey(newFcName)) {
                     Config.FcCustomizations.Add(newFcName, new TagCustomization());
                     newFcName = string.Empty;
+                    RequestSaveConfig();
                 }
             }
 
@@ -398,29 +411,76 @@ public unsafe class CustomFreeCompanyTags : UiAdjustments.SubTweak {
             }
 
             ImGui.EndTable();
+        }
 
-            if (ImGui.CollapsingHeader("Supported Icons")) {
-                if (ImGui.BeginTable("iconViewer", 1 + (int)(ImGui.GetContentRegionAvail().X / 100))) {
-                    foreach (var i in GraphicFont.FontIcons.Icons) {
-                        if (i.IsValid()) {
-                            ImGui.TableNextColumn();
-                            i.Draw();
-                            if (ImGui.IsItemHovered()) {
-                                ImGui.BeginTooltip();
-                                ImGui.Text($"<icon:{i.ID}>");
-                                ImGui.Separator();
-                                i.DrawScaled(new Vector2(2));
-                                ImGui.EndTooltip();
-                            }
+        if (ImGui.BeginTable("personalCustomizations", 4)) {
+            
+            ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthFixed, 28 * ImGui.GetIO().FontGlobalScale);
+            ImGui.TableSetupColumn(LocString("Replace"), ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.NoClip, 50 * ImGui.GetIO().FontGlobalScale);
+            ImGui.TableSetupColumn(LocString("Personal Tags"), ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.NoClip, 250f * ImGui.GetIO().FontGlobalScale);
+            ImGui.TableSetupColumn(LocString("Replacement"), ImGuiTableColumnFlags.NoClip);
+            ImGui.TableHeadersRow();
 
-                            if (ImGui.IsItemClicked()) {
-                                ImGui.SetClipboardText($"<icon:{i.ID}>");
-                            }
+            ulong? deleteContentId = null;
+            foreach (var (contentId, customization) in Config.PersonalCustomizations) {
+                var edit = TagCustomizationEditor(ref customization.DisplayName, customization, false, true);
+                if (edit == ChangeType.Delete) {
+                    deleteContentId = contentId;
+                }
+            }
+
+            if (deleteContentId != null) {
+                Config.PersonalCustomizations.Remove(deleteContentId.Value);
+            }
+
+            ImGui.TableNextColumn();
+            
+            ImGui.TableNextColumn();
+            ImGui.Text("Add PC:");
+            ImGui.TableNextColumn();
+
+            void ShowAddButton(string label, IGameObject? gameObject) {
+                var battleChara = (BattleChara*)(gameObject?.Address ?? 0);
+                var disable = gameObject is not IPlayerCharacter || battleChara == null || Config.PersonalCustomizations.ContainsKey(battleChara->ContentId);
+                
+                using (ImRaii.Disabled(disable)) {
+                    if (ImGui.Button(label) && battleChara != null && gameObject is IPlayerCharacter pc) {
+                        Config.PersonalCustomizations.TryAdd(battleChara->ContentId, new TagCustomization()
+                        {
+                            Enabled = true,
+                            DisplayName = $"{pc.Name.TextValue} @ {pc.HomeWorld.Value.Name.ExtractText()}",
+                            DisplayNameUpdated = true
+                        });
+                        RequestSaveConfig();
+                    }
+                }
+            }
+
+            ShowAddButton("Target", Service.Targets.SoftTarget ?? Service.Targets.Target);
+            ImGui.EndTable();
+        }
+
+        if (ImGui.CollapsingHeader("Supported Icons")) {
+            if (ImGui.BeginTable("iconViewer", 1 + (int)(ImGui.GetContentRegionAvail().X / 100))) {
+                foreach (var i in GraphicFont.FontIcons.Icons) {
+                    if (i.IsValid()) {
+                        ImGui.TableNextColumn();
+                        i.Draw();
+                        if (ImGui.IsItemHovered()) {
+                            ImGui.BeginTooltip();
+                            ImGui.Text($"<icon:{i.ID}>");
+                            ImGui.Separator();
+                            i.DrawScaled(new Vector2(2));
+                            ImGui.EndTooltip();
+                        }
+
+                        if (ImGui.IsItemClicked()) {
+                            ImGui.SetClipboardText($"<icon:{i.ID}>");
                         }
                     }
-
-                    ImGui.EndTable();
                 }
+
+                ImGui.EndTable();
             }
         }
     }
@@ -431,12 +491,12 @@ public unsafe class CustomFreeCompanyTags : UiAdjustments.SubTweak {
         Rename,
     }
 
-    private ChangeType TagCustomizationEditor(ref string name, TagCustomization tc, bool canChange = true) {
+    private ChangeType TagCustomizationEditor(ref string name, TagCustomization tc, bool canChange = true, bool isPersonal = false) {
         ImGui.TableNextColumn();
 
         var changeType = ChangeType.None;
 
-        if (canChange) {
+        if (canChange || isPersonal) {
             if (ImGui.Button($"X##fcList#{GetType().Name}_delete_{name}", new Vector2(-1, 24 * ImGui.GetIO().FontGlobalScale))) {
                 changeType = ChangeType.Delete;
             }
@@ -462,6 +522,10 @@ public unsafe class CustomFreeCompanyTags : UiAdjustments.SubTweak {
         } else {
             var s = string.Empty;
             ImGui.InputTextWithHint($"##fcList#{GetType().Name}_name_{name}", name, ref s, 5, ImGuiInputTextFlags.ReadOnly);
+        }
+
+        if (ImGui.IsItemHovered()) {
+            ImGui.SetTooltip($"{name}");
         }
 
         ImGui.TableNextColumn();
