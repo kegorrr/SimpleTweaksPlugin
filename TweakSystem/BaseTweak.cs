@@ -630,7 +630,7 @@ public abstract class BaseTweak {
 #elif DEBUG
         void Error(Exception ex, bool allowContinue = false, string message = "", [System.Runtime.CompilerServices.CallerFilePath] string callerFilePath = "", [System.Runtime.CompilerServices.CallerLineNumber] int callerLineNumber = 0, [System.Runtime.CompilerServices.CallerMemberName] string callerMemberName = "") => Plugin.Error(this, ex, allowContinue, message, callerFilePath, callerLineNumber, callerMemberName);
 #else
-        void Error(Exception ex, bool allowContinue = false, string message = "") => Plugin.Error(ex,  allowContinue, message);
+        void Error(Exception ex, bool allowContinue = false, string message = "") => Plugin.Error(this, ex, allowContinue, message);
 #endif
         
         
