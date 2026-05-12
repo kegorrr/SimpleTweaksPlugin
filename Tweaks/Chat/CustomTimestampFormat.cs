@@ -77,7 +77,7 @@ public unsafe class CustomTimestampFormat : ChatTweaks.SubTweak {
                     builder.PushColorRgba(Config.Color.AsVector4());
                     builder.Append((Config.UseServerTime ? time.DateTime : time.LocalDateTime).ToString(Config.Format));
                     builder.PopColor();
-                    var seStr = builder.ToReadOnlySeString();
+                    var seStr = builder.GetViewAsSpan();
                     if (seStr.IsEmpty) {
                         str->SetString(string.Empty);
                     } else {
